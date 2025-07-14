@@ -1,0 +1,259 @@
+name: Deploy Final-Task
+ 
+on:
+
+  push:
+
+    branches:
+
+      - main
+
+jobs:
+       
+
+  generate-tag:
+
+    runs-on: ubuntu-latest
+
+    outputs:
+
+      tag: ${{ steps.set_tag.outputs.tag }}
+
+    steps:
+
+      - name: Checkout repository
+
+        uses: actions/checkout@v3
+ 
+      - name: Generate git commit short SHA as tag
+
+        id: set_tag
+
+        run: |
+
+          GIT_SHORT_SHA=$(git rev-parse --short HEAD)
+
+          echo "Generated tag from commit: $GIT_SHORT_SHA"
+
+          echo "tag=$GIT_SHORT_SHA" >> $GITHUB_OUTPUT
+ 
+  terraform:
+
+    runs-on: ubuntu-latest
+
+    needs: generate-tag
+
+    steps:
+
+      - name: Checkout repository
+
+        uses: actions/checkout@v3
+ 
+      - name: Setup Terraform
+
+        uses: hashicorp/setup-terraform@v2
+
+        with:
+
+          terraform_version: latest
+ 
+      - name: Configure AWS Credentials
+
+        uses: aws-actions/configure-aws-credentials@v1
+
+        with:
+
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+          aws-region: ap-south-1
+ 
+      - name: Initialize Terraform
+
+        run: terraform init
+
+        working-directory: ./terraform
+ 
+      - name: Plan Terraform
+
+        run: |
+
+          terraform plan -var="image_tag=${{ needs.generate-tag.outputs.tag }}"
+
+        working-directory: ./terraform
+ 
+      - name: Apply Terraform
+
+        run: |
+
+          terraform apply -var="image_tag=${{ needs.generate-tag.outputs.tag }}" -auto-approve
+
+        working-directory: ./terraform
+
+        continue-on-error: True
+
+  install:
+
+    runs-on: ubuntu-latest
+
+    needs: terraform
+
+    steps:
+
+      - name: SSH into EC2 and install dependencies
+
+        uses: appleboy/ssh-action@master
+
+        with:
+
+          host: ${{ secrets.EC2_HOST }}
+
+          username: ${{ secrets.EC2_USER }}
+
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+
+          script: |
+
+            sudo yum update -y
+
+            sudo yum install -y docker git
+
+            sudo systemctl start docker
+
+            sudo systemctl enable docker
+
+            sudo usermod -aG docker ec2-user
+
+            sudo chmod 666 /var/run/docker.sock
+ 
+ 
+  build:
+
+    runs-on: ubuntu-latest
+
+    needs: install
+
+    steps:
+
+      - name: SSH into EC2 and deploy backend services
+
+        uses: appleboy/ssh-action@master
+
+        with:
+
+          host: ${{ secrets.EC2_HOST }}
+
+          username: ${{ secrets.EC2_USER }}
+
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+
+          script: |
+
+            git config --global --add safe.directory /home/${{ secrets.EC2_USER }}/capstone-app
+
+            if [ -d "/home/${{ secrets.EC2_USER }}/capstone-app" ]; then
+
+              cd /home/${{ secrets.EC2_USER }}/capstone-app
+
+              git pull origin main
+
+            else
+
+              git clone -b main https://${{ secrets.PAT_GITHUB }}@github.com/srk1899/capstone-app.git /home/${{ secrets.EC2_USER }}/capstone-app
+
+            fi
+
+            cd /home/${{ secrets.EC2_USER }}/capstone-app
+
+            echo "Cleaning up old Docker containers and images..."
+
+            SERVICES=("capstone-app-service")
+
+            ECR_PREFIX="890742579135.dkr.ecr.us-east-1.amazonaws.com"
+
+            for SERVICE in "${SERVICES[@]}"; do
+
+              FULL_NAME="$ECR_PREFIX/$SERVICE"
+
+              echo "Stopping and removing containers for $SERVICE..."
+
+              CONTAINERS=$(sudo docker ps -a --filter "ancestor=$FULL_NAME" --format "{{.ID}}")
+
+              if [ -n "$CONTAINERS" ]; then
+
+                echo "$CONTAINERS" | xargs -r sudo docker rm -f
+
+              fi
+
+              echo "Removing old images for $SERVICE (keeping latest)..."
+
+              IMAGES=$(sudo docker images --format "{{.Repository}} {{.Tag}} {{.ID}} {{.CreatedAt}}" | grep "$FULL_NAME" | sort -rk4 | awk 'NR>1 {print $3}' | uniq)
+
+              if [ -n "$IMAGES" ]; then
+
+                echo "$IMAGES" | xargs -r sudo docker rmi -f
+
+              fi
+
+            done
+
+            cd /home/ec2-user/capstone-app
+
+            echo "Building Docker images..."
+
+            sudo docker build -t capstone-app .
+
+           
+ 
+ 
+  deploy:
+
+    runs-on: ubuntu-latest
+
+    needs: [build, generate-tag]
+
+    steps:
+
+      - name: SSH into EC2 and push images to ECR
+
+        uses: appleboy/ssh-action@master
+
+        with:
+
+          host: ${{ secrets.EC2_HOST }}
+
+          username: ${{ secrets.EC2_USER }}
+
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+
+          script: |
+
+            TAG=${{ needs.generate-tag.outputs.tag }}
+
+            echo "Generated tag: $TAG"
+
+            ECR_URL=890742579135.dkr.ecr.us-east-1.amazonaws.com
+ 
+            echo "Logging into ECR..."
+
+            aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin $ECR_URL
+ 
+            echo "Tagging and pushing Docker images..."
+
+            docker tag capstone-app:latest $ECR_URL/capstone-app:$TAG
+
+            docker push $ECR_URL/capstone-app:$TAG
+ 
+           
+ 
+            aws sts get-caller-identity
+ 
+            echo "Triggering ECS deployment..."
+
+            aws ecs update-service --cluster capstone-app-cluster --service capstone-app-service --force-new-deployment
+
+           
+ 
+ 
+ 
