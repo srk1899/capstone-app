@@ -3,15 +3,15 @@ provider "aws" {
 }
 
 resource "aws_ecr_repository" "my_app" {
-  name = "node-app"
+  name = "simple-app"
 }
 
 resource "aws_ecs_cluster" "main" {
-  name = "node-fargate-cluster"
+  name = "simple-fargate-cluster"
 }
 
 resource "aws_lb" "app_alb" {
-  name               = "node-app-alb"
+  name               = "simple-app-alb"
   internal           = false
   load_balancer_type = "application"
   security_groups    = [var.alb_sg]
@@ -19,7 +19,7 @@ resource "aws_lb" "app_alb" {
 }
 
 resource "aws_lb_target_group" "blue" {
-  name        = "node-blue-tg"
+  name        = "simple-blue-tg"
   port        = 80
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
@@ -36,7 +36,7 @@ resource "aws_lb_target_group" "blue" {
 }
 
 resource "aws_lb_target_group" "green" {
-  name        = "node-green-tg"
+  name        = "simple-green-tg"
   port        = 80
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
@@ -66,13 +66,13 @@ resource "aws_lb_listener" "http" {
 }
 
 resource "aws_cloudwatch_log_group" "ecs_logs" {
-  name              = "/ecs/node-app"
+  name              = "/ecs/simple-app"
   retention_in_days =7
 }
 
 
 resource "aws_ecs_task_definition" "app" {
-  family                   = "node-fargate-task"
+  family                   = "simple-fargate-task"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   cpu                      = "256"
@@ -102,7 +102,7 @@ resource "aws_ecs_task_definition" "app" {
 }
 
 resource "aws_ecs_service" "app" {
-  name            = "node-app-service"
+  name            = "simple-app-service"
   cluster         = aws_ecs_cluster.main.id
   # task_definition = aws_ecs_task_definition.app.arn
   launch_type     = "FARGATE"
@@ -121,7 +121,7 @@ resource "aws_ecs_service" "app" {
 
   load_balancer {
     target_group_arn = aws_lb_target_group.blue.arn
-    container_name   = "node-app"
+    container_name   = "simple-app"
     container_port   = 80
   }
   lifecycle {
@@ -133,7 +133,7 @@ resource "aws_ecs_service" "app" {
 }
 
 resource "aws_codedeploy_app" "ecs_app" {
-  name             = "node-codedeploy-app"
+  name             = "simple-codedeploy-app"
   compute_platform = "ECS"
 }
 resource "aws_iam_role" "codedeploy_role" {
@@ -158,7 +158,7 @@ resource "aws_iam_role_policy_attachment" "codedeploy_attachment" {
 
 resource "aws_codedeploy_deployment_group" "ecs_group" {
   app_name              = aws_codedeploy_app.ecs_app.name
-  deployment_group_name = "calculator-deploy-group"
+  deployment_group_name = "simple-deploy-group"
   service_role_arn      = aws_iam_role.codedeploy_role.arn
   deployment_config_name = "CodeDeployDefault.ECSAllAtOnce"
 
