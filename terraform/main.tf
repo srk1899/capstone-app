@@ -104,7 +104,7 @@ resource "aws_ecs_task_definition" "app" {
 resource "aws_ecs_service" "app" {
   name            = "simple-app-service"
   cluster         = aws_ecs_cluster.main.id
-   task_definition = aws_ecs_task_definition.app.arn
+   #task_definition = aws_ecs_task_definition.app.arn
   launch_type     = "FARGATE"
   desired_count   = 1
 
