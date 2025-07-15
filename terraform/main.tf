@@ -81,7 +81,7 @@ resource "aws_ecs_task_definition" "app" {
 
   container_definitions = jsonencode([
     {
-      name      = "node-app"
+      name      = "simple-app"
       image     = "${aws_ecr_repository.my_app.repository_url}:${var.image_tag}"
       portMappings = [
         {
@@ -92,7 +92,7 @@ resource "aws_ecs_task_definition" "app" {
       logConfiguration = {
     logDriver = "awslogs"
     options = {
-      awslogs-group         = "/ecs/node-app"
+      awslogs-group         = "/ecs/simple-app"
       awslogs-region        = var.region
       awslogs-stream-prefix = "ecs"
     }
