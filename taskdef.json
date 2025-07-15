@@ -1,0 +1,28 @@
+{
+  "family": "node-fargate-task",
+  "networkMode": "awsvpc",
+  "executionRoleArn": "${EXEC_ROLE_ARN}",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "containerDefinitions": [
+    {
+      "name": "node-app",
+      "image": "${IMAGE_URI}",
+      "portMappings": [
+        {
+          "containerPort": 80,
+          "protocol": "tcp"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/node-app",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
