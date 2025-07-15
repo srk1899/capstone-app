@@ -3,7 +3,7 @@ name: Deploy on ECS (Blue-Green)
 on:
   push:
     branches:
-      - feat/blue-green
+       main
 jobs:
   generate-tag:
     runs-on: ubuntu-latest
@@ -40,7 +40,7 @@ jobs:
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ap-northeast-3
+        aws-region: us-east-1
 
     - name: Initialize Terraform
       run: terraform init
@@ -96,15 +96,15 @@ jobs:
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
             TAG=${{ needs.generate-tag.outputs.tag }}
-            ECR_URL=890742579135.dkr.ecr.ap-northeast-3.amazonaws.com
+            ECR_URL=970244359411.dkr.ecr.ap-northeast-3.amazonaws.com
 
-            cd /home/${{ secrets.EC2_USER }}/angular || git clone -b feat/blue-green https://${{ secrets.PAT_GITHUB }}@github.com/riya-kochar19/angular.git /home/${{ secrets.EC2_USER }}/angular && cd /home/${{ secrets.EC2_USER }}/angular
-            git fetch origin feat/blue-green && git reset --hard origin/feat/blue-green
+            cd /home/${{ secrets.EC2_USER }}/capstone-app || git clone -b main https://${{ secrets.PAT_GITHUB }}@github.com/srk1899/capstone-app.git /home/${{ secrets.EC2_USER }}/capstone-app && cd /home/${{ secrets.EC2_USER }}/capstone-app
+            git fetch origin main && git reset --hard origin/main
 
-            docker build -t calculator-app .
-            aws ecr get-login-password --region ap-northeast-3 | docker login --username AWS --password-stdin $ECR_URL
-            docker tag calculator-app:latest $ECR_URL/calculator-app:$TAG
-            docker push $ECR_URL/calculator-app:$TAG
+            docker build -t simple-app .
+            aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $ECR_URL
+            docker tag simple-app:latest $ECR_URL/simple-app:$TAG
+            docker push $ECR_URL/simple-app:$TAG
             docker system prune -a -f
 
   codedeploy-deploy:
@@ -116,7 +116,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-northeast-3
+          aws-region: us-east-1
 
       - name: Checkout code
         uses: actions/checkout@v3
@@ -128,7 +128,7 @@ jobs:
 
       - name: Register ECS Task Definition and Deploy via CodeDeploy
         run: |
-          export IMAGE_URI=890742579135.dkr.ecr.ap-northeast-3.amazonaws.com/calculator-app:${{ needs.generate-tag.outputs.tag }}
+          export IMAGE_URI=970244359411.dkr.ecr.us-east-1.amazonaws.com/simple-app:${{ needs.generate-tag.outputs.tag }}
           export EXEC_ROLE_ARN=${{ secrets.ECS_TASK_EXEC_ROLE }}
 
           # Render taskdef.json
@@ -149,8 +149,8 @@ jobs:
 
           # Deploy via CodeDeploy
           aws deploy create-deployment \
-            --application-name calculator-codedeploy-app \
-            --deployment-group-name calculator-deploy-group \
+            --application-name simple-codedeploy-app \
+            --deployment-group-name simple-deploy-group \
             --deployment-config-name CodeDeployDefault.ECSAllAtOnce \
             --revision revisionType=AppSpecContent,appSpecContent={content="$(cat rendered-appspec.yaml | base64 | tr -d '\n')"} \
             --description "Blue-Green Deploy via GitHub Actions"
@@ -168,7 +168,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-northeast-3
+          aws-region: us-east-1
       - name: Debug ALB DNS
         run: |
           echo "DNS received from Terraform: ${{ needs.terraform.outputs.alb_dns_name }}"    
