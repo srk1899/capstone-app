@@ -1,259 +1,183 @@
-name: Deploy Final-Task
- 
+name: Deploy on ECS (Blue-Green)
+
 on:
-
   push:
-
     branches:
-
-      - main
-
+      - feat/blue-green
 jobs:
-       
-
   generate-tag:
-
     runs-on: ubuntu-latest
-
     outputs:
-
       tag: ${{ steps.set_tag.outputs.tag }}
-
     steps:
+      - uses: actions/checkout@v3
 
-      - name: Checkout repository
-
-        uses: actions/checkout@v3
- 
       - name: Generate git commit short SHA as tag
-
         id: set_tag
-
         run: |
-
           GIT_SHORT_SHA=$(git rev-parse --short HEAD)
-
-          echo "Generated tag from commit: $GIT_SHORT_SHA"
-
           echo "tag=$GIT_SHORT_SHA" >> $GITHUB_OUTPUT
- 
+
+  
   terraform:
-
     runs-on: ubuntu-latest
-
     needs: generate-tag
-
+    outputs:
+      green_tg_arn: ${{ steps.tf_outputs.outputs.green_tg_arn }}
+      blue_tg_arn: ${{ steps.tf_outputs.outputs.blue_tg_arn }}
+      alb_listener_arn: ${{ steps.tf_outputs.outputs.alb_listener_arn }}
+      alb_dns_name: ${{ steps.tf_outputs.outputs.alb_dns_name }}
     steps:
+    - uses: actions/checkout@v3
 
-      - name: Checkout repository
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: latest
 
-        uses: actions/checkout@v3
- 
-      - name: Setup Terraform
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ap-northeast-3
 
-        uses: hashicorp/setup-terraform@v2
+    - name: Initialize Terraform
+      run: terraform init
+      working-directory: ./terraform
 
-        with:
+    - name: Plan Terraform
+      run: terraform plan -var="image_tag=${{ needs.generate-tag.outputs.tag }}"
+      working-directory: ./terraform
 
-          terraform_version: latest
- 
-      - name: Configure AWS Credentials
+    - name: Apply Terraform
+      id: apply
+      run: terraform apply -var="image_tag=${{ needs.generate-tag.outputs.tag }}" -auto-approve
+      working-directory: ./terraform
 
-        uses: aws-actions/configure-aws-credentials@v1
+    - name: Output Terraform values
+      id: tf_outputs
+      run: |
+        echo "green_tg_arn=$(terraform output -raw green_tg_arn)" >> $GITHUB_OUTPUT
+        echo "blue_tg_arn=$(terraform output -raw blue_tg_arn)" >> $GITHUB_OUTPUT
+        echo "alb_listener_arn=$(terraform output -raw alb_listener_arn)" >> $GITHUB_OUTPUT
+        echo "alb_dns_name=$(terraform output -raw alb_dns_name)" >> $GITHUB_OUTPUT
 
-        with:
+      working-directory: ./terraform
 
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-
-          aws-region: us-east-1
- 
-      - name: Initialize Terraform
-
-        run: terraform init
-
-        working-directory: ./terraform
- 
-      - name: Plan Terraform
-
-        run: |
-
-          terraform plan -var="image_tag=${{ needs.generate-tag.outputs.tag }}"
-
-        working-directory: ./terraform
- 
-      - name: Apply Terraform
-
-        run: |
-
-          terraform apply -var="image_tag=${{ needs.generate-tag.outputs.tag }}" -auto-approve
-
-        working-directory: ./terraform
-
-        continue-on-error: True
-
+  
   install:
-
     runs-on: ubuntu-latest
-
     needs: terraform
-
     steps:
-
-      - name: SSH into EC2 and install dependencies
-
+      - name: Install Docker on EC2
         uses: appleboy/ssh-action@master
-
         with:
-
           host: ${{ secrets.EC2_HOST }}
-
           username: ${{ secrets.EC2_USER }}
-
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
-
           script: |
-
             sudo yum update -y
-
             sudo yum install -y docker git
-
             sudo systemctl start docker
-
             sudo systemctl enable docker
-
             sudo usermod -aG docker ec2-user
-
             sudo chmod 666 /var/run/docker.sock
- 
- 
-  build:
 
+  build-push:
     runs-on: ubuntu-latest
-
-    needs: install
-
+    needs: [generate-tag, install]
     steps:
-
-      - name: SSH into EC2 and deploy backend services
-
+      - name: SSH into EC2 and build & push to ECR
         uses: appleboy/ssh-action@master
-
         with:
-
           host: ${{ secrets.EC2_HOST }}
-
           username: ${{ secrets.EC2_USER }}
-
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
-
           script: |
-
-            git config --global --add safe.directory /home/${{ secrets.EC2_USER }}/capstone-app
-
-            if [ -d "/home/${{ secrets.EC2_USER }}/capstone-app" ]; then
-
-              cd /home/${{ secrets.EC2_USER }}/capstone-app
-
-              git pull origin main
-
-            else
-
-              git clone -b main https://${{ secrets.PAT_GITHUB }}@github.com/srk1899/capstone-app.git /home/${{ secrets.EC2_USER }}/capstone-app
-
-            fi
-
-            cd /home/${{ secrets.EC2_USER }}/capstone-app
-
-            echo "Cleaning up old Docker containers and images..."
-
-            SERVICES=("capstone-app-service")
-
-            ECR_PREFIX="890742579135.dkr.ecr.us-east-1.amazonaws.com"
-
-            for SERVICE in "${SERVICES[@]}"; do
-
-              FULL_NAME="$ECR_PREFIX/$SERVICE"
-
-              echo "Stopping and removing containers for $SERVICE..."
-
-              CONTAINERS=$(sudo docker ps -a --filter "ancestor=$FULL_NAME" --format "{{.ID}}")
-
-              if [ -n "$CONTAINERS" ]; then
-
-                echo "$CONTAINERS" | xargs -r sudo docker rm -f
-
-              fi
-
-              echo "Removing old images for $SERVICE (keeping latest)..."
-
-              IMAGES=$(sudo docker images --format "{{.Repository}} {{.Tag}} {{.ID}} {{.CreatedAt}}" | grep "$FULL_NAME" | sort -rk4 | awk 'NR>1 {print $3}' | uniq)
-
-              if [ -n "$IMAGES" ]; then
-
-                echo "$IMAGES" | xargs -r sudo docker rmi -f
-
-              fi
-
-            done
-
-            cd /home/ec2-user/capstone-app
-
-            echo "Building Docker images..."
-
-            sudo docker build -t capstone-app .
-
-           
- 
- 
-  deploy:
-
-    runs-on: ubuntu-latest
-
-    needs: [build, generate-tag]
-
-    steps:
-
-      - name: SSH into EC2 and push images to ECR
-
-        uses: appleboy/ssh-action@master
-
-        with:
-
-          host: ${{ secrets.EC2_HOST }}
-
-          username: ${{ secrets.EC2_USER }}
-
-          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
-
-          script: |
-
             TAG=${{ needs.generate-tag.outputs.tag }}
+            ECR_URL=890742579135.dkr.ecr.ap-northeast-3.amazonaws.com
 
-            echo "Generated tag: $TAG"
+            cd /home/${{ secrets.EC2_USER }}/angular || git clone -b feat/blue-green https://${{ secrets.PAT_GITHUB }}@github.com/riya-kochar19/angular.git /home/${{ secrets.EC2_USER }}/angular && cd /home/${{ secrets.EC2_USER }}/angular
+            git fetch origin feat/blue-green && git reset --hard origin/feat/blue-green
 
-            ECR_URL=890742579135.dkr.ecr.us-east-1.amazonaws.com
- 
-            echo "Logging into ECR..."
+            docker build -t calculator-app .
+            aws ecr get-login-password --region ap-northeast-3 | docker login --username AWS --password-stdin $ECR_URL
+            docker tag calculator-app:latest $ECR_URL/calculator-app:$TAG
+            docker push $ECR_URL/calculator-app:$TAG
+            docker system prune -a -f
 
-            aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin $ECR_URL
- 
-            echo "Tagging and pushing Docker images..."
+  codedeploy-deploy:
+    runs-on: ubuntu-latest
+    needs: [build-push, terraform,generate-tag]
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-3
 
-            docker tag capstone-app:latest $ECR_URL/capstone-app:$TAG
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-            docker push $ECR_URL/capstone-app:$TAG
- 
-           
- 
-            aws sts get-caller-identity
- 
-            echo "Triggering ECS deployment..."
+      - name: Debug tag value
+        run: |
+          echo "Tag to be used: ${{ needs.generate-tag.outputs.tag }}"
+  
 
-            aws ecs update-service --cluster capstone-app-cluster --service capstone-app-service --force-new-deployment
+      - name: Register ECS Task Definition and Deploy via CodeDeploy
+        run: |
+          export IMAGE_URI=890742579135.dkr.ecr.ap-northeast-3.amazonaws.com/calculator-app:${{ needs.generate-tag.outputs.tag }}
+          export EXEC_ROLE_ARN=${{ secrets.ECS_TASK_EXEC_ROLE }}
 
-           
- 
+          # Render taskdef.json
+          TASK_DEF_JSON=$(envsubst < taskdef.json)
+          echo "$TASK_DEF_JSON" > rendered-taskdef.json
+
+          # Register task definition
+          TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://rendered-taskdef.json \
+            --query "taskDefinition.taskDefinitionArn" \
+            --output text)
+
+          echo "TASK_DEF_ARN=$TASK_DEF_ARN"
+
+          # Render appspec.yaml
+          export TASK_DEF_ARN=$TASK_DEF_ARN
+          envsubst < appspec.yaml > rendered-appspec.yaml
+
+          # Deploy via CodeDeploy
+          aws deploy create-deployment \
+            --application-name calculator-codedeploy-app \
+            --deployment-group-name calculator-deploy-group \
+            --deployment-config-name CodeDeployDefault.ECSAllAtOnce \
+            --revision revisionType=AppSpecContent,appSpecContent={content="$(cat rendered-appspec.yaml | base64 | tr -d '\n')"} \
+            --description "Blue-Green Deploy via GitHub Actions"
+
+
+
+  health-check:
+    runs-on: ubuntu-latest
+    needs: [codedeploy-deploy, terraform] 
+    outputs:
+      healthy: ${{ steps.check.outputs.healthy }}
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-3
+      - name: Debug ALB DNS
+        run: |
+          echo "DNS received from Terraform: ${{ needs.terraform.outputs.alb_dns_name }}"    
+      - name: Check Health of Green Service
+        id: check
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://${{ needs.terraform.outputs.alb_dns_name }}/green)
+          echo "Green service HTTP status: $STATUS"
+          [[ "$STATUS" == "200" ]] && echo "healthy=true" >> $GITHUB_OUTPUT || echo "healthy=false" >> $GITHUB_OUTPUT
+      
  
  
