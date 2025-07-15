@@ -1,5 +1,5 @@
 {
-  "family": "node-fargate-task",
+  "family": "simple-fargate-task",
   "networkMode": "awsvpc",
   "executionRoleArn": "${EXEC_ROLE_ARN}",
   "requiresCompatibilities": ["FARGATE"],
@@ -7,7 +7,7 @@
   "memory": "512",
   "containerDefinitions": [
     {
-      "name": "node-app",
+      "name": "simple-app",
       "image": "${IMAGE_URI}",
       "portMappings": [
         {
@@ -18,7 +18,7 @@
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
-          "awslogs-group": "/ecs/node-app",
+          "awslogs-group": "/ecs/simple-app",
           "awslogs-region": "us-east-1",
           "awslogs-stream-prefix": "ecs"
         }
