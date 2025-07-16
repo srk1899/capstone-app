@@ -96,9 +96,9 @@ jobs:
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
             TAG=${{ needs.generate-tag.outputs.tag }}
-            ECR_URL=970244359411.dkr.ecr.ap-northeast-3.amazonaws.com
+            ECR_URL=970244359411.dkr.ecr.us-east-1.amazonaws.com
 
-            cd /home/${{ secrets.EC2_USER }}/capstone-app || git clone -b main https://${{ secrets.PAT_GITHUB }}@github.com/srk1899/capstone-app.git /home/${{ secrets.EC2_USER }}/capstone-app && cd /home/${{ secrets.EC2_USER }}/capstone-app
+            cd /home/${{ secrets.EC2_USER }}/simple-app || git clone -b main https://${{ secrets.PAT_GITHUB }}@github.com/srk1899/simple-app.git /home/${{ secrets.EC2_USER }}/simple-app && cd /home/${{ secrets.EC2_USER }}/simple-app
             git fetch origin main && git reset --hard origin/main
 
             docker build -t simple-app .
